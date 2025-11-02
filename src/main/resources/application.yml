@@ -1,0 +1,232 @@
+spring:
+  application:
+    name: amortisation-microservice
+
+  # ** Database Configuration
+  datasource:
+    oracle:
+      url: jdbc:oracle:thin:@${ORACLE_HOST:localhost}:${ORACLE_PORT:1521}/${ORACLE_SERVICE:ORCL}
+      username: ${ORACLE_USERNAME:lms_user}
+      password: ${ORACLE_PASSWORD:changeme}
+      driver-class-name: oracle.jdbc.OracleDriver
+      hikari:
+        maximum-pool-size: 50
+        minimum-idle: 10
+        connection-timeout: 20000
+        idle-timeout: 300000
+        max-lifetime: 1200000
+        leak-detection-threshold: 60000
+        pool-name: OracleHikariPool
+        connection-test-query: SELECT 1 FROM DUAL
+
+  # ** JPA Configuration
+  jpa:
+    hibernate:
+      ddl-auto: none
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.Oracle12cDialect
+        format_sql: true
+        jdbc:
+          batch_size: 50
+          fetch_size: 100
+        cache:
+          use_second_level_cache: false
+
+  # ** Redis Cache Configuration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:false}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: 2000ms
+
+  # ** Cache Configuration
+  cache:
+    type: redis
+    redis:
+      time-to-live: 3600000 # 1 hour default
+      cache-null-values: false
+
+  # ** Security Configuration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OAUTH2_ISSUER_URI:https://auth.example.com}
+          jwk-set-uri: ${OAUTH2_JWK_SET_URI:https://auth.example.com/.well-known/jwks.json}
+
+  # ** Batch Configuration
+  batch:
+    job:
+      enabled: false # Prevent auto-start on application launch
+    jdbc:
+      initialize-schema: always
+
+# ** Actuator Configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,ready,prometheus,metrics,info
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    redis:
+      enabled: true
+    db:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${ENVIRONMENT:dev}
+    export:
+      prometheus:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0 # 100% sampling in dev, reduce in prod
+
+# ** Server Configuration
+server:
+  port: 8080
+  shutdown: graceful
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/plain
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 10
+    max-connections: 10000
+    accept-count: 100
+
+# ** Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.lms.amortisation: DEBUG
+    org.springframework.web: INFO
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId}/%X{spanId}] %logger{36} - %msg%n"
+  file:
+    name: logs/amortisation-service.log
+    max-size: 10MB
+    max-history: 30
+
+# ** Application Configuration
+app:
+  amortisation:
+    calculation:
+      decimal-precision: 15
+      rounding-mode: HALF_UP
+      max-tenure-months: 360
+      min-loan-amount: 10000
+
+    cache:
+      product-config-ttl: 3600 # 1 hour
+      interest-rate-ttl: 3600 # 1 hour
+      calculation-result-ttl: 900 # 15 minutes
+
+    batch:
+      chunk-size: 1000
+      parallel-threads: 10
+      max-retry-attempts: 3
+      skip-limit: 100
+
+    compliance:
+      audit-enabled: true
+      regulatory-version: "RBI-2024-v1"
+      retention-years: 7
+
+    resilience:
+      circuit-breaker:
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 50
+        slow-call-duration-threshold: 3000
+        permitted-number-of-calls-in-half-open-state: 3
+        sliding-window-size: 10
+        wait-duration-in-open-state: 60000
+
+      retry:
+        max-attempts: 3
+        wait-duration: 1000
+        retry-exceptions:
+          - java.sql.SQLException
+          - org.springframework.dao.DataAccessException
+
+      rate-limiter:
+        limit-for-period: 100
+        limit-refresh-period: 1000
+        timeout-duration: 0
+
+# ** OpenAPI Documentation
+springdoc:
+  api-docs:
+    path: /api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+  show-actuator: false
+
+---
+# ** Development Profile
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  level:
+    com.lms.amortisation: DEBUG
+    org.springframework.web: DEBUG
+
+app:
+  amortisation:
+    compliance:
+      audit-enabled: true
+
+---
+# ** Production Profile
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+logging:
+  level:
+    root: WARN
+    com.lms.amortisation: INFO
+    org.springframework.web: WARN
+
+management:
+  tracing:
+    sampling:
+      probability: 0.1 # 10% sampling in production
+
+app:
+  amortisation:
+    compliance:
+      audit-enabled: true

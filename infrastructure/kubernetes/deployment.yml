@@ -1,0 +1,221 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amortisation-service
+  namespace: lms
+  labels:
+    app: amortisation-service
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: amortisation-service
+  template:
+    metadata:
+      labels:
+        app: amortisation-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/actuator/prometheus"
+    spec:
+      serviceAccountName: amortisation-service-sa
+
+      # ** Pod Security
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      # ** Init Container (for DB connectivity check)
+      initContainers:
+      - name: wait-for-db
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z -v -w30 ${ORACLE_HOST} ${ORACLE_PORT}
+          do
+            echo "Waiting for Oracle database..."
+            sleep 5
+          done
+        env:
+        - name: ORACLE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oracle.host
+        - name: ORACLE_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oracle.port
+
+      # ** Application Container
+      containers:
+      - name: amortisation-service
+        image: ${ECR_REGISTRY}/amortisation-microservice:${VERSION}
+        imagePullPolicy: Always
+
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+
+        # ** Environment Variables
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "prod"
+
+        - name: ORACLE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oracle.host
+
+        - name: ORACLE_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oracle.port
+
+        - name: ORACLE_SERVICE
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oracle.service
+
+        - name: ORACLE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: amortisation-secrets
+              key: oracle.username
+
+        - name: ORACLE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: amortisation-secrets
+              key: oracle.password
+
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: redis.host
+
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: redis.port
+
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: amortisation-secrets
+              key: redis.password
+
+        - name: REDIS_SSL_ENABLED
+          value: "true"
+
+        - name: OAUTH2_ISSUER_URI
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oauth2.issuer.uri
+
+        - name: OAUTH2_JWK_SET_URI
+          valueFrom:
+            configMapKeyRef:
+              name: amortisation-config
+              key: oauth2.jwk.set.uri
+
+        - name: ENVIRONMENT
+          value: "production"
+
+        - name: JAVA_OPTS
+          value: >-
+            -Xms512m
+            -Xmx2048m
+            -XX:+UseG1GC
+            -XX:MaxGCPauseMillis=200
+            -XX:+HeapDumpOnOutOfMemoryError
+            -XX:HeapDumpPath=/tmp/heapdump.hprof
+            -Djava.security.egd=file:/dev/./urandom
+
+        # ** Resource Limits
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+
+        # ** Health Probes
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        # ** Startup Probe
+        startupProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 30
+
+        # ** Volume Mounts
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /app/logs
+
+      # ** Volumes
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+
+      # ** Pod Topology
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - amortisation-service
+              topologyKey: kubernetes.io/hostname
+
+      # ** Termination Grace Period
+      terminationGracePeriodSeconds: 60
